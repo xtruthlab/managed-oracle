@@ -128,9 +128,11 @@ contract DeployManagedOptimisticOracleV2 is Script {
      * @return deployerPrivateKey The derived private key for the deployer
      */
     function _getDeployerPrivateKey() internal view returns (uint256) {
-        string memory mnemonic = vm.envString("MNEMONIC");
-        // Derive the 0 index address from mnemonic
-        return vm.deriveKey(mnemonic, 0);
+        // Prefer PRIVATE_KEY (single-key deployer, matches the protocol repo's
+        // X Layer deploy). Fall back to deriving index 0 from MNEMONIC.
+        uint256 pk = vm.envOr("PRIVATE_KEY", uint256(0));
+        if (pk != 0) return pk;
+        return vm.deriveKey(vm.envString("MNEMONIC"), 0);
     }
 
     /**
@@ -140,7 +142,10 @@ contract DeployManagedOptimisticOracleV2 is Script {
     function _getDefaultFinderAddress() internal view returns (address finderAddress) {
         uint256 chainId = block.chainid;
 
-        if (chainId == 11155111) {
+        if (chainId == 1952) {
+            // X Layer testnet — Finder from the protocol repo's canonical deploy
+            return 0x290453F12fF8fA1f2530f2544C6c58F4C40F556C;
+        } else if (chainId == 11155111) {
             // Sepolia
             return 0xf4C48eDAd256326086AEfbd1A53e1896815F8f13;
         } else if (chainId == 80002) {

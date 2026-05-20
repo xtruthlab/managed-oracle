@@ -19,11 +19,11 @@ contract DeployAddressWhitelist is Script {
         // Load environment variables from .env file (if it exists)
         // This will automatically load variables from .env file in the project root
 
-        // Get required environment variables
-        string memory mnemonic = vm.envString("MNEMONIC");
-
-        // Derive the 0 index address from mnemonic
-        uint256 deployerPrivateKey = vm.deriveKey(mnemonic, 0);
+        // Prefer PRIVATE_KEY (single-key deployer), else derive from MNEMONIC.
+        uint256 deployerPrivateKey = vm.envOr("PRIVATE_KEY", uint256(0));
+        if (deployerPrivateKey == 0) {
+            deployerPrivateKey = vm.deriveKey(vm.envString("MNEMONIC"), 0);
+        }
         address deployer = vm.addr(deployerPrivateKey);
 
         // Check if WHITELIST_OWNER is set, default to deployer if not set
