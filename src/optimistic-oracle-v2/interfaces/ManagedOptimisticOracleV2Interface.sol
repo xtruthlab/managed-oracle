@@ -27,11 +27,19 @@ abstract contract ManagedOptimisticOracleV2Interface {
     error UnsupportedWhitelistInterface();
     /// @notice Thrown when minimum bond is higher than maximum bond.
     error MinimumBondAboveMaximumBond();
+    /// @notice Thrown when the reward split is set above 100% (10000 bps).
+    error RewardSplitBpsTooHigh();
 
     event AllowedBondRangeUpdated(IERC20 indexed currency, uint256 newMinimumBond, uint256 newMaximumBond);
     event MinimumLivenessUpdated(uint256 newMinimumLiveness);
     event DefaultProposerWhitelistUpdated(address indexed newWhitelist);
     event RequesterWhitelistUpdated(address indexed newWhitelist);
+    /// @notice Emitted when the reward-split recipient (treasury/governance) is updated.
+    event RewardRecipientUpdated(address indexed recipient);
+    /// @notice Emitted when the reward-split share (basis points) is updated.
+    event RewardSplitBpsUpdated(uint16 bps);
+    /// @notice Emitted at settlement when a reward cut is diverted to the recipient.
+    event RewardSplit(address indexed recipient, IERC20 indexed currency, uint256 amount);
     event CustomBondSet(
         bytes32 indexed managedRequestId,
         address requester,

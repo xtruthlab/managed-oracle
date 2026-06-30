@@ -117,8 +117,10 @@ contract UpgradeManagedOptimisticOracleV2 is Script {
      * @return deployerPrivateKey The derived private key for the deployer
      */
     function _getDeployerPrivateKey() internal view returns (uint256) {
+        // Prefer a raw PRIVATE_KEY if provided; otherwise derive from MNEMONIC (0 index).
+        uint256 pk = vm.envOr("PRIVATE_KEY", uint256(0));
+        if (pk != 0) return pk;
         string memory mnemonic = vm.envString("MNEMONIC");
-        // Derive the 0 index address from mnemonic
         return vm.deriveKey(mnemonic, 0);
     }
 }

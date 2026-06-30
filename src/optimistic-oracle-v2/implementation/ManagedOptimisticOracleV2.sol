@@ -3,6 +3,7 @@ pragma solidity ^0.8.27;
 
 import {ERC165Checker} from "@openzeppelin/contracts/utils/introspection/ERC165Checker.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import {AddressWhitelistInterface} from "../../common/interfaces/AddressWhitelistInterface.sol";
 import {ManagedOptimisticOracleV2Interface} from "../interfaces/ManagedOptimisticOracleV2Interface.sol";
@@ -36,6 +37,11 @@ contract ManagedOptimisticOracleV2 is ManagedOptimisticOracleV2Interface, Optimi
         // isSet is not used anymore as liveness cannot be set to 0, but it is kept for storage layout compatibility.
         bool isSet;
     }
+
+    using SafeERC20 for IERC20;
+
+    // Basis-point denominator for the reward split (10000 = 100%).
+    uint16 internal constant MAX_REWARD_SPLIT_BPS = 10000;
 
     // Config admin role is used to manage request managers and set other default parameters.
     bytes32 public constant CONFIG_ADMIN_ROLE = keccak256("CONFIG_ADMIN_ROLE");
@@ -174,6 +180,26 @@ contract ManagedOptimisticOracleV2 is ManagedOptimisticOracleV2Interface, Optimi
      */
     function setRequesterWhitelist(address whitelist) external nonReentrant onlyConfigAdmin {
         _setRequesterWhitelist(whitelist);
+    }
+
+    /**
+     * @notice Sets the treasury/governance address that receives the reward split at settlement.
+     * @dev Only callable by the config admin. Set to the zero address to disable the split (the full
+     * reward then goes to the winner, i.e. the canonical OOv2 behaviour).
+     * @param recipient address that receives `rewardSplitBps` of each request's reward.
+     */
+    function setRewardRecipient(address recipient) external nonReentrant onlyConfigAdmin {
+        _setRewardRecipient(recipient);
+    }
+
+    /**
+     * @notice Sets the share of each request's reward diverted to `rewardRecipient` at settlement.
+     * @dev Only callable by the config admin. In basis points; 5000 = 50%. Set to 0 to disable the
+     * split. Only the reward is affected — bonds and the final fee always go to the winner in full.
+     * @param bps reward share for the treasury, in basis points (<= 10000).
+     */
+    function setRewardSplitBps(uint16 bps) external nonReentrant onlyConfigAdmin {
+        _setRewardSplitBps(bps);
     }
 
     /**
@@ -405,6 +431,39 @@ contract ManagedOptimisticOracleV2 is ManagedOptimisticOracleV2Interface, Optimi
         emit RequesterWhitelistUpdated(whitelist);
     }
 
+    function _setRewardRecipient(address recipient) private {
+        rewardRecipient = recipient;
+        emit RewardRecipientUpdated(recipient);
+    }
+
+    function _setRewardSplitBps(uint16 bps) private {
+        require(bps <= MAX_REWARD_SPLIT_BPS, RewardSplitBpsTooHigh());
+        rewardSplitBps = bps;
+        emit RewardSplitBpsUpdated(bps);
+    }
+
+    /**
+     * @notice Diverts `rewardSplitBps` of the request reward to `rewardRecipient` at settlement,
+     * returning the remainder for the winner. No-op (full reward to winner) when reward is 0, the
+     * recipient is unset, or bps is 0 — so the contract behaves exactly like canonical OOv2 until a
+     * config admin turns the split on. Only the reward is touched; bonds and final fee are not.
+     */
+    function _takeRewardCut(IERC20 currency, uint256 reward)
+        internal
+        override
+        returns (uint256 winnerReward)
+    {
+        address recipient = rewardRecipient;
+        uint16 bps = rewardSplitBps;
+        if (reward == 0 || recipient == address(0) || bps == 0) return reward;
+        uint256 cut = (reward * bps) / MAX_REWARD_SPLIT_BPS; // bps <= 10000 ⇒ cut <= reward
+        if (cut > 0) {
+            currency.safeTransfer(recipient, cut);
+            emit RewardSplit(recipient, currency, cut);
+        }
+        return reward - cut;
+    }
+
     /**
      * @notice Validates that the given address implements the AddressWhitelistInterface.
      * @dev Reverts if the address does not implement the interface.
@@ -462,11 +521,20 @@ contract ManagedOptimisticOracleV2 is ManagedOptimisticOracleV2Interface, Optimi
         }
     }
 
+    // ---- Reward split (managed protocol fee) -------------------------------------------------
+    // At settlement, `rewardSplitBps` of each request's REWARD is diverted to `rewardRecipient`
+    // (the project treasury / governance) and the remainder goes to the winning proposer/disputer.
+    // Bonds and the final fee are never touched. A zero recipient OR zero bps disables the split
+    // entirely (full reward to the winner) — so an upgraded contract stays dormant until configured.
+    // (address 20B + uint16 2B pack into a single slot → __gap decremented by 1: 993 -> 992.)
+    address public rewardRecipient;
+    uint16 public rewardSplitBps;
+
     /**
      * @dev Reserve storage slots for future versions of this base contract to add state variables without affecting the
      * storage layout of child contracts. Decrement the size of __gap whenever state variables are added. This is at the
      * bottom of contract to make sure its always at the end of storage.
      * See https://docs.openzeppelin.com/upgrades-plugins/writing-upgradeable#storage-gaps
      */
-    uint256[993] private __gap;
+    uint256[992] private __gap;
 }

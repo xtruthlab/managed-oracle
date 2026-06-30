@@ -624,7 +624,11 @@ contract OptimisticOracleV2 is
         if (state == State.Expired) {
             // In the expiry case, just pay back the proposer's bond and final fee along with the reward.
             request.resolvedPrice = request.proposedPrice;
-            payout = request.requestSettings.bond + request.finalFee + request.reward;
+            // _takeRewardCut() may divert part of the REWARD (e.g. a managed protocol fee). The
+            // default keeps the full reward for the winner, so behaviour is unchanged unless a
+            // derived contract overrides it. Bond and final fee are never touched.
+            uint256 winnerReward = _takeRewardCut(request.currency, request.reward);
+            payout = request.requestSettings.bond + request.finalFee + winnerReward;
             request.currency.safeTransfer(request.proposer, payout);
         } else if (state == State.Resolved) {
             // In the Resolved case, pay either the disputer or the proposer the entire payout (+ bond and reward).
@@ -634,6 +638,7 @@ contract OptimisticOracleV2 is
                 _stampAncillaryData(ancillaryData, requester)
             );
             bool disputeSuccess = request.resolvedPrice != request.proposedPrice;
+            address winner = disputeSuccess ? request.disputer : request.proposer;
             uint256 bond = request.requestSettings.bond;
 
             // Unburned portion of the loser's bond = 1 - burned bond.
@@ -643,9 +648,12 @@ contract OptimisticOracleV2 is
             // - Their bond back.
             // - The unburned portion of the loser's bond.
             // - Their final fee back.
-            // - The request reward (if not already refunded -- if refunded, it will be set to 0).
-            payout = bond + unburnedBond + request.finalFee + request.reward;
-            request.currency.safeTransfer(disputeSuccess ? request.disputer : request.proposer, payout);
+            // - The request reward, less any cut taken by _takeRewardCut (if already refunded on
+            //   dispute it is 0). The cut applies ONLY to the reward; bond/unburnedBond/finalFee
+            //   are always returned to the winner in full.
+            uint256 winnerReward = _takeRewardCut(request.currency, request.reward);
+            payout = bond + unburnedBond + request.finalFee + winnerReward;
+            request.currency.safeTransfer(winner, payout);
         } else {
             revert RequestNotSettleable();
         }
@@ -668,6 +676,20 @@ contract OptimisticOracleV2 is
             OptimisticRequester(requester).priceSettled(identifier, timestamp, ancillaryData, request.resolvedPrice);
         }
         _endReentrantGuardDisabled();
+    }
+
+    /**
+     * @notice Settlement hook to optionally divert part of a request's REWARD. The default keeps the
+     * full reward for the winner (returns it unchanged), so settlement behaviour is identical unless
+     * a derived contract overrides it. Invoked for both undisputed (Expired) and DVM-resolved
+     * settlements. Only the reward is ever in scope — bonds and the final fee are out of reach.
+     * @param currency the request's payout currency (passed so overrides can transfer a cut).
+     * @param reward the request's reward amount.
+     * @return winnerReward the reward to pay the winner after any cut taken by the override.
+     */
+    function _takeRewardCut(IERC20 currency, uint256 reward) internal virtual returns (uint256 winnerReward) {
+        currency; // silence unused-parameter warning in the default (no cut taken)
+        return reward;
     }
 
     function _getRequest(address requester, bytes32 identifier, uint256 timestamp, bytes memory ancillaryData)
