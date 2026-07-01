@@ -683,4 +683,87 @@ contract ManagedOptimisticOracleV2Test is Test {
         moo.requestManagerSetCustomLiveness(requester, IDENTIFIER, ANCILLARY, 2 hours);
         vm.stopPrank();
     }
+
+    // ------------------------------------------------------------------------
+    // Reward split (managed protocol fee). The settle/payout path had NO prior
+    // coverage and it moves funds, so test: dormant-by-default, the split math,
+    // a configurable bps, zero-reward no-op, and the config/access controls.
+    // ------------------------------------------------------------------------
+
+    // Request `reward`, propose (undisputed), warp past liveness, settle.
+    // Returns (bond+finalFee, settle payout).
+    function _requestProposeSettle(uint256 reward) internal returns (uint256 bondPlusFee, uint256 payout) {
+        uint256 t = block.timestamp;
+        _makeRequest(requester, t, reward);
+        _proposeFor(sender, proposer, requester, t, 1);
+        vm.warp(block.timestamp + 2 days + 1); // past the default 2-day liveness
+        OptimisticOracleV2Interface.Request memory r = moo.getRequest(requester, IDENTIFIER, t, ANCILLARY);
+        bondPlusFee = r.requestSettings.bond + r.finalFee;
+        payout = moo.settle(requester, IDENTIFIER, t, ANCILLARY);
+    }
+
+    function test_rewardSplit_disabledByDefault_fullRewardToProposer() public {
+        uint256 reward = 100 ether;
+        uint256 pBefore = currency.balanceOf(proposer);
+        (uint256 bondPlusFee, uint256 payout) = _requestProposeSettle(reward);
+        assertEq(payout, bondPlusFee + reward, "default: winner keeps the full reward");
+        assertEq(currency.balanceOf(proposer) - pBefore, bondPlusFee + reward, "proposer paid full reward");
+    }
+
+    function test_rewardSplit_active_paysTreasuryHalf() public {
+        address treasury = makeAddr("treasury");
+        vm.startPrank(configAdmin);
+        moo.setRewardRecipient(treasury);
+        moo.setRewardSplitBps(5000); // 50%
+        vm.stopPrank();
+
+        uint256 reward = 100 ether;
+        uint256 pBefore = currency.balanceOf(proposer);
+        (uint256 bondPlusFee, uint256 payout) = _requestProposeSettle(reward);
+
+        assertEq(currency.balanceOf(treasury), reward / 2, "treasury gets 50% of the reward");
+        assertEq(currency.balanceOf(proposer) - pBefore, bondPlusFee + reward / 2, "proposer: bond+fee+50%");
+        assertEq(payout, bondPlusFee + reward / 2, "payout = winner net (bond/fee untouched)");
+    }
+
+    function test_rewardSplit_customBps() public {
+        address treasury = makeAddr("treasury");
+        vm.startPrank(configAdmin);
+        moo.setRewardRecipient(treasury);
+        moo.setRewardSplitBps(2500); // 25%
+        vm.stopPrank();
+
+        (uint256 bondPlusFee, uint256 payout) = _requestProposeSettle(100 ether);
+        assertEq(currency.balanceOf(treasury), 25 ether, "treasury gets 25%");
+        assertEq(payout, bondPlusFee + 75 ether, "winner gets 75% of reward");
+    }
+
+    function test_rewardSplit_zeroReward_noTransfer() public {
+        address treasury = makeAddr("treasury");
+        vm.startPrank(configAdmin);
+        moo.setRewardRecipient(treasury);
+        moo.setRewardSplitBps(5000);
+        vm.stopPrank();
+        (uint256 bondPlusFee, uint256 payout) = _requestProposeSettle(0);
+        assertEq(currency.balanceOf(treasury), 0, "no reward, nothing to split");
+        assertEq(payout, bondPlusFee, "payout = bond + fee only");
+    }
+
+    function test_setRewardSplitBps_revertsAbove100pct() public {
+        vm.prank(configAdmin);
+        vm.expectRevert(ManagedOptimisticOracleV2Interface.RewardSplitBpsTooHigh.selector);
+        moo.setRewardSplitBps(10001);
+    }
+
+    function test_setRewardRecipient_onlyConfigAdmin() public {
+        vm.prank(nonRequester);
+        vm.expectRevert();
+        moo.setRewardRecipient(makeAddr("x"));
+    }
+
+    function test_setRewardSplitBps_onlyConfigAdmin() public {
+        vm.prank(nonRequester);
+        vm.expectRevert();
+        moo.setRewardSplitBps(5000);
+    }
 }
