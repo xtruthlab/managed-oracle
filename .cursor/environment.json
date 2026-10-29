@@ -1,0 +1,4 @@
+{
+  "name": "managed-oracle",
+  "install": "set -euo pipefail\nif [ ! -x \"$HOME/.foundry/bin/foundryup\" ]; then\n  curl -L https://foundry.paradigm.xyz | bash\nfi\n\"$HOME/.foundry/bin/foundryup\"\nfor bin in forge cast anvil chisel; do\n  sudo ln -sfn \"$HOME/.foundry/bin/$bin\" \"/usr/local/bin/$bin\"\ndone\ngit submodule update --init --recursive\nyarn install --frozen-lockfile\n"
+}
